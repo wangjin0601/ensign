@@ -1,0 +1,31 @@
+name: 签到
+
+on:
+  schedule:
+    - cron: '44 1 26 8 *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout codes
+        uses: actions/checkout@v4
+      - name: Update system and install zsh
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get install zsh -y
+          
+      - name: Init Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: 3.8
+          
+      - name: Start
+        env:
+            ELANTRAN_AUTH: ${{ secrets.ELANTRAN_AUTH }}
+            PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          pip3 install requests pytz
+          python3 elantran_checkin.py

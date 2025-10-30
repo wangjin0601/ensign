@@ -1,2 +1,1 @@
-# ensign
-自动签到
+# nsign

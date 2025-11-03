@@ -667,7 +667,7 @@ def random_delay():
 def main():
     """主函数"""
     try:
-        # random_delay()
+        random_delay()
         
         # 获取环境变量中的认证Token
         auth_tokens_str = os.getenv('ELANTRAN_AUTH', '')

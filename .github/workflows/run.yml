@@ -1,14 +1,14 @@
-name: 签到
+name: NSign
 
 on:
   schedule:
-    - cron: '44 1 26 8 *'
+    - cron: '58 8 * * *'
   workflow_dispatch:
 
 jobs:
-  build:
+  sign:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - name: Checkout codes
         uses: actions/checkout@v4

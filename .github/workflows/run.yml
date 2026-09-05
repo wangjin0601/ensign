@@ -26,6 +26,15 @@ jobs:
         env:
             ELANTRAN_AUTH: ${{ secrets.ELANTRAN_AUTH }}
             PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+            # ---- 可选：内容多样性配置（不配也能跑，用内置话题库） ----
+            LLM_API_KEY: ${{ secrets.LLM_API_KEY }}       # 聊天LLM Key（OpenAI兼容，如DeepSeek）
+            LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}     # 默认 https://api.deepseek.com/v1
+            LLM_MODEL: ${{ secrets.LLM_MODEL }}           # 默认 deepseek-chat
+            IMG_API_KEY: ${{ secrets.IMG_API_KEY }}       # AI生图Key（缺省复用LLM）
+            IMG_BASE_URL: ${{ secrets.IMG_BASE_URL }}
+            IMG_MODEL: ${{ secrets.IMG_MODEL }}
+            ELANTRAN_UPLOAD_URL: ${{ secrets.ELANTRAN_UPLOAD_URL }}  # 平台上图接口（抓包）
+            IMG_MODE: ${{ vars.IMG_MODE }}                # auto/feed/remote/none
         run: |
           pip3 install requests pytz
           python3 elantran_checkin.py

@@ -17,11 +17,51 @@ import base64
 import random
 import requests
 import pytz
+from html import escape as html_escape
 from datetime import datetime, timedelta
 from urllib3.exceptions import InsecureRequestWarning
 
+from content_engine import ContentEngine
+
 # 禁用SSL警告
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+
+def render_post_payload(title, content, image_url=None):
+    """把标题/正文/配图渲染成 save_post_info 接口需要的 payload
+    content: 纯文本，多个段落用 \\n 分隔
+    image_url: 可选配图（嵌入正文 HTML + image 列表）
+    """
+    title = (title or "").strip()[:30]
+    paragraphs = [p.strip() for p in (content or "").split("\n") if p.strip()]
+    if not paragraphs:
+        paragraphs = ["冒个泡"]
+
+    html_parts = []
+    ops = []
+    if image_url:
+        # 与客户端一致的图片嵌入结构
+        html_parts.append(
+            '<div class="embed-innerApp" contenteditable="false" width="100%">'
+            "<p><img src=\"{}\"></p></div>".format(image_url))
+        ops.append({"insert": {"image": image_url}})
+        ops.append({"insert": "\n"})
+    for para in paragraphs:
+        html_parts.append("<p>{}</p>".format(html_escape(para)))
+        ops.append({"insert": "{}\n".format(para)})
+    html_parts.append("<p><br></p>")
+
+    data = {
+        "forum_id": "e51bcafdf3f8b55bae08b4bcb816faa9",
+        "topic_id": "",
+        "title": title,
+        "content": "".join(html_parts),
+        "content_origin": json.dumps({"ops": ops}, ensure_ascii=False),
+        "cover": "",
+    }
+    if image_url:
+        data["image"] = json.dumps([image_url])
+    return data
 
 class ElantranCheckin:
     def __init__(self, auth_token=None):
@@ -35,9 +75,18 @@ class ElantranCheckin:
         
         # 解析用户信息
         self.user_name = "未知用户"
+        self.user_id = ""
         token_data = self.decode_jwt_token(self.auth_token)
         if token_data:
             self.user_name = token_data.get('name', '未知用户')
+            self.user_id = str(token_data.get('id', ''))
+
+        # 内容引擎：LLM 可配，未配置时用内置话题库，保证每次内容不同、贴合真人
+        self.content_engine = ContentEngine(
+            user_name=self.user_name,
+            user_id=self.user_id,
+            uploader=self._upload_image,
+        )
         
         # API配置
         self.base_url = 'https://elantran.vintro.cn'
@@ -249,36 +298,79 @@ class ElantranCheckin:
             self.log("❌ 点赞异常: {}".format(e), 'ERROR')
             return False, "点赞异常: {}".format(e)
     
-    def create_post(self, title="早上好", content="早上好"):
-        """发布帖子"""
+    def create_post(self, title="", content="", image_url=None):
+        """发布帖子（title/content 每次动态生成，可带一张配图）"""
         try:
             url = "{}/home/bbs/save_post_info".format(self.base_url)
-            data = {
-                "forum_id": "e51bcafdf3f8b55bae08b4bcb816faa9",
-                "topic_id": "",
-                "title": title,
-                "content": "<p>{}<br></p>".format(content),
-            "content_origin": json.dumps({"ops": [{"insert": "{}\n".format(content)}]}),
-                "cover": ""
-            }
+            data = render_post_payload(title, content, image_url)
             response = self.session.post(url, json=data)
-            
+
             self.log("📡 发布帖子请求: {}".format(response.status_code))
-            
+
             if response.status_code == 200:
                 result = response.json()
                 self.log("📊 发布帖子响应: code={}".format(result.get('code', -1)))
-                
+
                 if result.get('code') == 0:
-                    return True, "发布成功"
+                    return True, "发布成功: 《{}》".format((title or "")[:20])
                 else:
                     return False, "发布失败: {}".format(result.get('message', '未知错误'))
             else:
                 return False, "请求失败: HTTP {}".format(response.status_code)
-                
+
         except Exception as e:
             self.log("❌ 发布帖子异常: {}".format(e), 'ERROR')
             return False, "发布异常: {}".format(e)
+
+    def _upload_image(self, data, filename, content_type='image/jpeg'):
+        """把图片字节上传到平台，返回可展示的 URL。
+        需要环境变量 ELANTRAN_UPLOAD_URL（抓包得到的上图中转接口地址，
+        支持绝对 URL 或相对路径，如 /home/bbs/upload_image）。未配置返回 None。
+        """
+        endpoint = os.getenv('ELANTRAN_UPLOAD_URL', '').strip()
+        if not endpoint or not data:
+            return None
+        url = endpoint if endpoint.startswith('http') else self.base_url + endpoint
+        try:
+            files = {'file': (filename, data, content_type)}
+            headers = dict(self.session.headers)
+            headers.pop('content-type', None)  # multipart 让 requests 自己生成
+            resp = requests.post(url, files=files, headers=headers, timeout=60, verify=False)
+            if resp.status_code != 200:
+                self.log("⚠️ 上图失败: HTTP {}".format(resp.status_code), 'WARNING')
+                return None
+            text = resp.text or ""
+            # 常见返回形态：{code:0,data:{url:...}} / {url:...} / 纯文本URL
+            candidate = None
+            try:
+                obj = resp.json()
+                stack = [obj]
+                while stack:
+                    cur = stack.pop()
+                    if isinstance(cur, dict):
+                        for v in cur.values():
+                            if isinstance(v, str) and v.startswith('http'):
+                                candidate = v
+                                break
+                            elif isinstance(v, (dict, list)):
+                                stack.append(v)
+                        if candidate:
+                            break
+                    elif isinstance(cur, list):
+                        stack.extend(cur)
+            except Exception:
+                pass
+            if not candidate:
+                t = text.strip()
+                if t.startswith('http'):
+                    candidate = t
+            if candidate:
+                self.log("✅ 图片上传成功: {}".format(candidate[:80]))
+                return candidate
+            self.log("⚠️ 上图返回未解析到URL: {}".format(text[:100]), 'WARNING')
+        except Exception as e:
+            self.log("❌ 上图异常: {}".format(e), 'ERROR')
+        return None
     
     def get_post_detail(self, post_id):
         """获取帖子详情"""
@@ -304,15 +396,16 @@ class ElantranCheckin:
             self.log("❌ 获取帖子详情异常: {}".format(e), 'ERROR')
             return False, "获取异常: {}".format(e)
     
-    def comment_post(self, post_id, comment="帅气"):
-        """评论帖子"""
+    def comment_post(self, post_id, comment=""):
+        """评论帖子（comment 每次按帖子主题动态生成）"""
         try:
             url = "{}/home/bbs/save_post_comment_info".format(self.base_url)
             data = {
                 "post_id": post_id,
                 "comment_id": "",
-                "content": "<p>{}<br></p>".format(comment),
-            "content_origin": json.dumps({"ops": [{"insert": "{}\n".format(comment)}]}),
+                "content": "<p>{}<br></p>".format(html_escape(comment)),
+                "content_origin": json.dumps(
+                    {"ops": [{"insert": "{}\n".format(comment)}]}, ensure_ascii=False),
                 "at_uid": ""
             }
             response = self.session.post(url, json=data)
@@ -333,6 +426,41 @@ class ElantranCheckin:
         except Exception as e:
             self.log("❌ 评论异常: {}".format(e), 'ERROR')
             return False, "评论异常: {}".format(e)
+
+    def make_and_post(self, feed_posts=None):
+        """生成一条新内容并发布（每次内容都不同，可带配图）"""
+        try:
+            ctx = self.content_engine.build_post(feed_posts=feed_posts)
+        except Exception as e:
+            self.log("❌ 生成发帖内容异常: {}".format(e), 'ERROR')
+            ctx = {"title": "来冒个泡", "text": "今天也来冒个泡，祝大家心情愉快。", "image_url": None}
+        title = ctx.get("title") or "来冒个泡"
+        text = ctx.get("text") or ""
+        image_url = ctx.get("image_url")
+        self.log("📝 本次内容: 《{}》 配图: {}".format(title, "有" if image_url else "无"))
+        if text:
+            self.log("📝 正文: {}".format(text[:100]))
+        return self.create_post(title, text, image_url=image_url)
+
+    def make_and_comment(self, post):
+        """读取帖子详情，按帖子主题生成相关回复并评论"""
+        if not isinstance(post, dict):
+            return False, "帖子数据无效"
+        post_id = post.get('id')
+        post_title = (post.get('title') or '未知标题')[:20]
+        # 先读详情，让回复贴合帖子真实内容（而不是见谁都回同一句）
+        ok, detail = self.get_post_detail(post_id)
+        if not ok or not isinstance(detail, dict):
+            detail = post
+        try:
+            reply = self.content_engine.build_reply(detail)
+        except Exception as e:
+            self.log("❌ 生成回复内容异常: {}".format(e), 'ERROR')
+            reply = "支持一下，好帖子。"
+        if not reply:
+            reply = "支持一下，好帖子。"
+        self.log("💬 回复《{}》: {}".format(post_title, reply[:60]))
+        return self.comment_post(post_id, reply)
     
     def get_signin_detail(self):
         """获取签到明细信息"""
@@ -465,90 +593,89 @@ class ElantranCheckin:
         
         if liked_count == 0:
             results.append("没有可点赞的帖子")
-        
-        # 2. 发帖
+
+        # 2. 发帖：内容每次动态生成，尽量贴合当天时段/社区近期话题，可带一张配图
         self.log("📝 开始发布帖子...")
-        success, msg = self.create_post("早上好", "早上好")
+        success, msg = self.make_and_post(feed_posts=all_unliked_posts)
         if success:
             self.log("✅ {}".format(msg))
             results.append(msg)
         else:
             self.log("❌ {}".format(msg))
             results.append(msg)
-        
+
         # 发帖后延迟
         delay = random.uniform(60, 600)
         self.log("⏰ 发帖操作延迟 {:.1f} 分钟".format(delay/60))
         time.sleep(delay)
-        
-        # 3. 随机选择帖子进行评论
+
+        # 3. 随机选一条帖子，读详情后按帖子主题回复
         self.log("💬 开始随机评论帖子...")
         if all_unliked_posts:
             random_post = random.choice(all_unliked_posts)
-            post_id = random_post.get('id')
-            post_title = random_post.get('title', '未知标题')[:20]
-            
-            success, msg = self.comment_post(post_id, "帅气")
+            post_title = (random_post.get('title') or '未知标题')[:20]
+
+            success, msg = self.make_and_comment(random_post)
             if success:
                 self.log("✅ 评论成功: {}".format(post_title))
                 results.append("评论成功: {}".format(post_title))
             else:
                 self.log("❌ 评论失败: {} - {}".format(post_title, msg))
                 results.append("评论失败: {} - {}".format(post_title, msg))
-            
+
             delay = random.uniform(60, 600)
             self.log("⏰ 评论操作延迟 {:.1f} 分钟".format(delay/60))
             time.sleep(delay)
         else:
             results.append("没有可评论的帖子")
-        
+
         return True, "\n".join(results)
-    
+
     def _weekend_actions(self):
-        """周六、周日的操作：发帖 + 评论"""
+        """周六、周日的操作：发帖 + 评论（内容每次动态生成）"""
         results = []
-        
-        # 1. 发帖
+
+        # 1. 先取一次帖子列表：既做发帖参考（话题/配图），也做评论目标
+        self.log("📋 获取帖子列表...")
+        success, posts = self.get_post_list()
+        if not success:
+            results.append("获取帖子列表失败: {}".format(posts))
+            posts = []
+
+        # 2. 发帖：内容每次动态生成，尽量贴合当天时段/社区近期话题，可带一张配图
         self.log("📝 开始发布帖子...")
-        success, msg = self.create_post("早上好", "早上好")
+        success, msg = self.make_and_post(feed_posts=posts)
         if success:
             self.log("✅ {}".format(msg))
             results.append(msg)
         else:
             self.log("❌ {}".format(msg))
             results.append(msg)
-        
+
         delay = random.uniform(60, 600)
         self.log("⏰ 发帖操作延迟 {:.1f} 分钟".format(delay/60))
         time.sleep(delay)
-        
-        # 2. 获取帖子列表用于评论
-        self.log("📋 获取帖子列表用于评论...")
-        success, posts = self.get_post_list()
-        if not success:
-            results.append("获取帖子列表失败: {}".format(posts))
-        else:
-            # 随机选择帖子进行评论
+
+        # 3. 随机挑一条帖子，读详情后按帖子主题回复
+        if posts:
             self.log("💬 开始随机评论帖子...")
-            if posts:
-                random_post = random.choice(posts)
-                post_id = random_post.get('id')
-                post_title = random_post.get('title', '未知标题')[:20]
-                
-                success, msg = self.comment_post(post_id, "帅气")
-                if success:
-                    self.log("✅ 评论成功: {}".format(post_title))
-                    results.append("评论成功: {}".format(post_title))
-                else:
-                    self.log("❌ 评论失败: {} - {}".format(post_title, msg))
-                    results.append("评论失败: {} - {}".format(post_title, msg))
-                
-                delay = random.uniform(60, 600)
-                self.log("⏰ 评论操作延迟 {:.1f} 分钟".format(delay/60))
-                time.sleep(delay)
+            random_post = random.choice(posts)
+            post_title = (random_post.get('title') or '未知标题')[:20]
+
+            success, msg = self.make_and_comment(random_post)
+            if success:
+                self.log("✅ 评论成功: {}".format(post_title))
+                results.append("评论成功: {}".format(post_title))
             else:
-                results.append("没有可评论的帖子")
-        
+                self.log("❌ 评论失败: {} - {}".format(post_title, msg))
+                results.append("评论失败: {} - {}".format(post_title, msg))
+
+            delay = random.uniform(60, 600)
+            self.log("⏰ 评论操作延迟 {:.1f} 分钟".format(delay/60))
+            time.sleep(delay)
+        else:
+            results.append("没有可评论的帖子")
+
         return True, "\n".join(results)
 
     def send_notification(self, title, content):

@@ -82,10 +82,12 @@ class ElantranCheckin:
             self.user_id = str(token_data.get('id', ''))
 
         # 内容引擎：LLM 可配，未配置时用内置话题库，保证每次内容不同、贴合真人
+        # 只有配了平台上图接口才启用 AI 生图（生图 URL 有时效，需即时上传）
+        _has_upload = bool(os.getenv('ELANTRAN_UPLOAD_URL', '').strip())
         self.content_engine = ContentEngine(
             user_name=self.user_name,
             user_id=self.user_id,
-            uploader=self._upload_image,
+            uploader=self._upload_image if _has_upload else None,
         )
         
         # API配置

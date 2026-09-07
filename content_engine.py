@@ -16,13 +16,21 @@
    - 平台 feed 里已有的图片（域名与官方一致，渲染最稳）；
    - Wikimedia Commons 上真实伊兰特N/现代N 实拍图（免费许可、稳定可外链）；
    - Lorem Picsum 随机风景图；
-   - 可选 AI 生图（OpenAI 兼容 images 接口），若配置了上传接口则先上传再引用。
+   - 可选 AI 生图（默认硅基流动 SiliconFlow 文生图接口，OpenAI 兼容厂商也可配），
+     生成后立即下载并经平台上图接口引用，展示最稳。
 
 环境变量（全部可选，缺省自动降级，不影响签到主流程）：
-  LLM_API_KEY / LLM_BASE_URL / LLM_MODEL   聊天 LLM（如 DeepSeek / OpenAI / SiliconFlow 兼容）
-  IMG_API_KEY / IMG_BASE_URL / IMG_MODEL   图片生成 LLM（缺省复用 LLM_*，需支持 images/generations）
+  LLM_API_KEY / LLM_BASE_URL / LLM_MODEL   聊天 LLM（OpenAI 兼容，如 DeepSeek）
+                                           默认 https://api.deepseek.com/v1 + deepseek-chat
+  IMG_API_KEY / IMG_BASE_URL / IMG_MODEL   文生图（推荐硅基流动 SiliconFlow）
+   - 注意：DeepSeek 官方没有文生图接口！生图 Key 请单独填文生图服务商（如硅基流动），
+     生图配置不会自动复用 LLM_API_KEY。
+   - IMG_BASE_URL 默认 https://api.siliconflow.cn/v1
+   - IMG_MODEL 默认 Qwen/Qwen-Image（也可用 black-forest-labs/FLUX.1-schnell 等）
+   - 只有同时配置了 ELANTRAN_UPLOAD_URL，AI 生图才会真正发起请求
+     （硅基流动生成的图 URL 1 小时后过期，必须即时下载后上传）
   ELANTRAN_UPLOAD_URL                      平台上图接口（POST multipart, 字段名 file），抓包可得
-  IMG_MODE                                 auto / remote / feed / none
+  IMG_MODE                                 auto / feed / remote / none
 """
 
 import os
@@ -361,21 +369,28 @@ class ContentEngine(object):
         self.rng = random.Random(
             (acc_seed ^ (_ENGINE_COUNTER * 1000003)) & 0xFFFFFFFF ^ int(time.time() * 1000000))
 
-        # LLM 配置
+        # LLM 配置（聊天文案，OpenAI 兼容，如 DeepSeek）
         self.llm_key = os.getenv("LLM_API_KEY", "").strip()
         self.llm_base = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1").strip().rstrip("/")
         self.llm_model = os.getenv("LLM_MODEL", "deepseek-chat").strip()
-        # 图片生成配置（缺省复用 LLM 配置）
-        self.img_key = os.getenv("IMG_API_KEY", "").strip() or self.llm_key
-        self.img_base = os.getenv("IMG_BASE_URL", "").strip().rstrip("/") or self.llm_base
-        self.img_model = os.getenv("IMG_MODEL", "").strip()
+        # 生图配置：与 LLM 完全独立（DeepSeek 没有文生图接口，绝不复用 LLM Key）
+        # 默认走硅基流动 SiliconFlow：https://api.siliconflow.cn/v1
+        self.img_key = os.getenv("IMG_API_KEY", "").strip()
+        self.img_base = (os.getenv("IMG_BASE_URL", "").strip().rstrip("/")
+                         or "https://api.siliconflow.cn/v1")
+        self.img_model = (os.getenv("IMG_MODEL", "").strip()
+                          or "Qwen/Qwen-Image")
         self.img_mode = os.getenv("IMG_MODE", "auto").strip().lower() or "auto"
+        # 请求体字段名：硅基流动用 image_size，OpenAI 兼容厂商用 size
+        self.img_style = ("siliconflow"
+                          if ("siliconflow.cn" in self.img_base or "siliconflow.com" in self.img_base)
+                          else "openai")
 
         self.llm_on = bool(self.llm_key and self.llm_base and self.llm_model)
-        # AI 生图可用：需要 key，且要么配了平台上图接口、要么显式允许外链 AI 图
-        self.ai_img_on = bool(self.img_key and self.img_base)
-        self._ai_remote_ok = os.getenv("IMG_ALLOW_REMOTE_AI", "") == "1"
-        self.ai_usable = self.ai_img_on and (bool(self.uploader) or self._ai_remote_ok)
+        # AI 生图可用：需要独立生图 Key + 平台上图接口
+        # （生图 URL 普遍有时效，必须能即时下载再上传，否则不发请求白花钱）
+        self.ai_img_on = bool(self.img_key and self.img_base and self.img_model)
+        self.ai_usable = self.ai_img_on and bool(self.uploader)
         # 已有帖子标题（同进程内避免重复）
         self._used_titles = set()
 
@@ -716,8 +731,21 @@ class ContentEngine(object):
         seed = "n-{:d}".format(self.rng.randint(1, 999999))
         return "https://picsum.photos/seed/{}/1280/960".format(seed)
 
+    def _img_size_for(self, model):
+        """不同模型推荐/支持的生成尺寸（方形优先，适配论坛配图）"""
+        m = (model or "").lower()
+        if "qwen" in m and "image" in m:
+            return "1328x1328"  # Qwen-Image 官方推荐 1:1
+        if "z-image" in m:
+            return "1024x1024"
+        return "1024x1024"
+
     def _ai_image(self, scene, ref=None):
-        """AI 生成一张与场景匹配的图；返回最终可用的 URL 或 None"""
+        """AI 生成一张与场景匹配的图，即时下载并经平台上图接口引用。
+        没有上传通道时直接返回 None（不发请求，避免白花钱/引用失效图）。
+        """
+        if not self.uploader:
+            return None
         style = self.rng.choice([
             "写实摄影风格，光线自然",
             "动漫/二次元插画风格，色彩明快",
@@ -735,42 +763,58 @@ class ContentEngine(object):
         if ref and ref.get("title"):
             prompt += "。主题参考（仅灵感，不要出现文字）：{}".format(ref["title"][:40])
 
-        payload = {
-            "model": self.img_model or self.llm_model,
-            "prompt": prompt,
-            "n": 1,
-            "size": "1024x1024",
-            "response_format": "b64_json",
-        }
+        size = self._img_size_for(self.img_model)
+        if self.img_style == "siliconflow":
+            # 硅基流动原生参数：image_size，返回 images:[{url}]（URL 1 小时过期）
+            payload = {"model": self.img_model, "prompt": prompt, "image_size": size}
+        else:
+            # OpenAI 兼容：size + n，data:[{b64_json|url}]
+            payload = {"model": self.img_model, "prompt": prompt,
+                       "size": size, "n": 1, "response_format": "b64_json"}
         try:
             resp = requests.post(
                 "{}/images/generations".format(self.img_base),
                 json=payload, timeout=120,
                 headers={"Authorization": "Bearer {}".format(self.img_key)})
             resp.raise_for_status()
-            data = resp.json()["data"][0]
+            obj = resp.json()
         except Exception:
             return None
 
-        # 返回的是图片数据 → 走平台上图接口
-        b64 = data.get("b64_json") or ""
-        if b64 and self.uploader:
+        # 兼容两种返回结构：OpenAI data:[...] / 硅基流动 images:[{url}]
+        entries = []
+        for key in ("data", "images"):
+            v = obj.get(key)
+            if isinstance(v, list):
+                entries.extend(e for e in v if isinstance(e, dict))
+        if not entries:
+            return None
+        first = entries[0]
+        b64 = first.get("b64_json") or ""
+        url = first.get("url") or ""
+
+        raw = None
+        if b64:
             try:
                 raw = base64.b64decode(b64)
-                if raw[:8] == b"\x89PNG\r\n\x1a\n":
-                    ext, ctype = ".png", "image/png"
-                elif raw[:3] == b"\xff\xd8\xff":
-                    ext, ctype = ".jpg", "image/jpeg"
-                else:
-                    ext, ctype = ".jpg", "image/jpeg"
-                url = self.uploader(raw, "n_share{}".format(ext), ctype)
-                if url:
-                    return url
             except Exception:
-                pass
-        # 返回的是远程 URL → 仅当显式允许时作为外链候选（部分厂商URL有时效）
-        if self._ai_remote_ok:
-            url = data.get("url") or ""
-            if url.startswith("http"):
-                return url
-        return None
+                raw = None
+        elif url.startswith("http"):
+            try:
+                # 生成图 URL 普遍有时效（硅基流动 1 小时），立刻下载
+                resp_img = requests.get(url, timeout=60)
+                if resp_img.status_code == 200:
+                    raw = resp_img.content
+            except Exception:
+                raw = None
+        if not raw:
+            return None
+
+        try:
+            if raw[:8] == b"\x89PNG\r\n\x1a\n":
+                ext, ctype = ".png", "image/png"
+            else:
+                ext, ctype = ".jpg", "image/jpeg"
+            return self.uploader(raw, "n_share{}".format(ext), ctype)
+        except Exception:
+            return None

@@ -20,13 +20,13 @@
      生成后立即下载并经平台上图接口引用，展示最稳。
 
 环境变量（全部可选，缺省自动降级，不影响签到主流程）：
-  LLM_API_KEY / LLM_BASE_URL / LLM_MODEL   聊天 LLM（OpenAI 兼容，如 DeepSeek）
-                                           默认 https://api.deepseek.com/v1 + deepseek-chat
-  IMG_API_KEY / IMG_BASE_URL / IMG_MODEL   文生图（推荐硅基流动 SiliconFlow）
-   - 注意：DeepSeek 官方没有文生图接口！生图 Key 请单独填文生图服务商（如硅基流动），
-     生图配置不会自动复用 LLM_API_KEY。
+  LLM_API_KEY / LLM_BASE_URL / LLM_MODEL   聊天 LLM（OpenAI 兼容，默认走硅基流动 SiliconFlow）
+                                           默认 https://api.siliconflow.cn/v1 + deepseek-ai/DeepSeek-V4-Flash
+  IMG_API_KEY / IMG_BASE_URL / IMG_MODEL   文生图（默认硅基流动 SiliconFlow）
+   - 注意：DeepSeek 官方直连接口没有文生图能力；生图请用硅基流动的文生图模型。
+     一个硅基流动 Key 可同时填给 LLM_API_KEY 和 IMG_API_KEY（两者配置相互独立，不会互相复用）。
    - IMG_BASE_URL 默认 https://api.siliconflow.cn/v1
-   - IMG_MODEL 默认 Qwen/Qwen-Image（也可用 black-forest-labs/FLUX.1-schnell 等）
+   - IMG_MODEL 默认 Kwai-Kolors/Kolors（性价比高；也常用 black-forest-labs/FLUX.1-schnell、Qwen/Qwen-Image）
    - 只有同时配置了 ELANTRAN_UPLOAD_URL，AI 生图才会真正发起请求
      （硅基流动生成的图 URL 1 小时后过期，必须即时下载后上传）
   ELANTRAN_UPLOAD_URL                      平台上图接口（POST multipart, 字段名 file），抓包可得
@@ -369,17 +369,18 @@ class ContentEngine(object):
         self.rng = random.Random(
             (acc_seed ^ (_ENGINE_COUNTER * 1000003)) & 0xFFFFFFFF ^ int(time.time() * 1000000))
 
-        # LLM 配置（聊天文案，OpenAI 兼容，如 DeepSeek）
+        # LLM 配置（聊天文案，OpenAI 兼容，默认硅基流动 SiliconFlow 托管的 DeepSeek-V4-Flash）
         self.llm_key = os.getenv("LLM_API_KEY", "").strip()
-        self.llm_base = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1").strip().rstrip("/")
-        self.llm_model = os.getenv("LLM_MODEL", "deepseek-chat").strip()
-        # 生图配置：与 LLM 完全独立（DeepSeek 没有文生图接口，绝不复用 LLM Key）
-        # 默认走硅基流动 SiliconFlow：https://api.siliconflow.cn/v1
+        self.llm_base = os.getenv("LLM_BASE_URL",
+                                  "https://api.siliconflow.cn/v1").strip().rstrip("/")
+        self.llm_model = os.getenv("LLM_MODEL",
+                                   "deepseek-ai/DeepSeek-V4-Flash").strip()
+        # 生图配置：与 LLM 完全独立（默认走硅基流动 SiliconFlow，避免误用无生图能力的 Key）
         self.img_key = os.getenv("IMG_API_KEY", "").strip()
         self.img_base = (os.getenv("IMG_BASE_URL", "").strip().rstrip("/")
                          or "https://api.siliconflow.cn/v1")
         self.img_model = (os.getenv("IMG_MODEL", "").strip()
-                          or "Qwen/Qwen-Image")
+                          or "Kwai-Kolors/Kolors")
         self.img_mode = os.getenv("IMG_MODE", "auto").strip().lower() or "auto"
         # 请求体字段名：硅基流动用 image_size，OpenAI 兼容厂商用 size
         self.img_style = ("siliconflow"

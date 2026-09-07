@@ -24,23 +24,24 @@
 
 | Secret | 说明 | 默认 |
 | --- | --- | --- |
-| `LLM_API_KEY` | **聊天** LLM Key（OpenAI 兼容接口） | 无（自动用内置话题库） |
-| `LLM_BASE_URL` | 聊天 LLM 接口地址 | `https://api.deepseek.com/v1` |
-| `LLM_MODEL` | 聊天模型名 | `deepseek-chat` |
-| `IMG_API_KEY` | **文生图** Key（硅基流动 SiliconFlow 等）。⚠️ 不要填 DeepSeek——DeepSeek 官方没有文生图接口 | 无 |
+| `LLM_API_KEY` | **聊天** LLM Key（OpenAI 兼容接口，默认走硅基流动） | 无（自动用内置话题库） |
+| `LLM_BASE_URL` | 聊天 LLM 接口地址 | `https://api.siliconflow.cn/v1` |
+| `LLM_MODEL` | 聊天模型名 | `deepseek-ai/DeepSeek-V4-Flash` |
+| `IMG_API_KEY` | **文生图** Key（硅基流动 SiliconFlow 等）。⚠️ 别填只支持聊天的 Key（如 DeepSeek 官方直连）——DeepSeek 官方没有文生图接口 | 无 |
 | `IMG_BASE_URL` | 文生图接口地址 | `https://api.siliconflow.cn/v1` |
-| `IMG_MODEL` | 文生图模型 | `Qwen/Qwen-Image` |
+| `IMG_MODEL` | 文生图模型 | `Kwai-Kolors/Kolors` |
 | `ELANTRAN_UPLOAD_URL` | 平台上图接口（抓包可得，形如 `/home/xxx/upload`） | 无 |
 | `IMG_MODE` | `auto` / `feed`（只用社区已有图）/ `remote`（只用外链图）/ `none`（不带图） | `auto` |
 
 配置建议：
 
-- **想要 LLM 写文案更像真人**：填 `LLM_API_KEY`（DeepSeek 即可，聊天接口）。
-- **想要 AI 生成配图**：填硅基流动 `IMG_API_KEY`，**并且**配 `ELANTRAN_UPLOAD_URL`。生图与聊天配置相互独立，DeepSeek Key 不会也不该被拿去生图。
+- 一个**硅基流动 Key** 即可同时负责聊天和生图：填到 `LLM_API_KEY`（DeepSeek-V4-Flash 文案）+ `IMG_API_KEY`（Kolors 配图）。两套配置相互独立，不会互相污染。
+- **想要 LLM 写文案更像真人**：填 `LLM_API_KEY` 即可（默认就是硅基流动 + DeepSeek-V4-Flash）。
+- **想要 AI 生成配图**：填 `IMG_API_KEY`，**并且**配 `ELANTRAN_UPLOAD_URL`。只配 Key 没配上图接口时不会发AI生图请求（自动退回社区图/实拍图/风景图，不影响运行）。
 - 硅基流动文生图模型推荐：
-  - `Qwen/Qwen-Image`（默认，中文风景/写实/动漫效果好，支持 1:1 高清尺寸）；
+  - `Kwai-Kolors/Kolors`（默认，性价比高、中文效果好）；
   - `black-forest-labs/FLUX.1-schnell`（快、便宜，画质中上）；
-  - `Z-Image`、`FLUX.1-dev` 等。以硅基流动控制台"图像生成"里当前可用的模型名为准。
+  - `Qwen/Qwen-Image`（效果更好、更贵）。以硅基流动控制台"图像生成"里当前可用的模型名为准。
 - 硅基流动生成的图片 URL 约 1 小时后失效，所以代码会**立即下载再上传**到平台；没配上传接口时**不会发起生图请求**（避免白花钱），自动退回社区图/实拍图/风景图。
 
 配图说明：

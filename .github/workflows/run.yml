@@ -27,13 +27,13 @@ jobs:
             ELANTRAN_AUTH: ${{ secrets.ELANTRAN_AUTH }}
             PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
             # ---- 可选：内容多样性配置（不配也能跑，用内置话题库） ----
-            LLM_API_KEY: ${{ secrets.LLM_API_KEY }}       # 聊天LLM Key（OpenAI兼容，如DeepSeek）
-            LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}     # 默认 https://api.deepseek.com/v1
-            LLM_MODEL: ${{ secrets.LLM_MODEL }}           # 默认 deepseek-chat
-            # AI生图（默认硅基流动 SiliconFlow）。注意：DeepSeek 没有文生图接口，勿用 DeepSeek Key
+            LLM_API_KEY: ${{ secrets.LLM_API_KEY }}       # 聊天LLM Key（OpenAI兼容，默认硅基流动）
+            LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}     # 默认 https://api.siliconflow.cn/v1
+            LLM_MODEL: ${{ secrets.LLM_MODEL }}           # 默认 deepseek-ai/DeepSeek-V4-Flash
+            # AI生图（默认硅基流动 SiliconFlow）。注：只支持聊天的Key（如DeepSeek官方直连）不能生图
             IMG_API_KEY: ${{ secrets.IMG_API_KEY }}       # 生图Key（硅基流动等文生图服务商）
             IMG_BASE_URL: ${{ secrets.IMG_BASE_URL }}     # 默认 https://api.siliconflow.cn/v1
-            IMG_MODEL: ${{ secrets.IMG_MODEL }}           # 默认 Qwen/Qwen-Image
+            IMG_MODEL: ${{ secrets.IMG_MODEL }}           # 默认 Kwai-Kolors/Kolors
             ELANTRAN_UPLOAD_URL: ${{ secrets.ELANTRAN_UPLOAD_URL }}  # 平台上图接口；未配则不发起AI生图
             IMG_MODE: ${{ vars.IMG_MODE }}                # auto/feed/remote/none
         run: |

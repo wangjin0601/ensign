@@ -778,7 +778,7 @@ class ElantranCheckin:
 
 
 def random_delay():
-    delay_minutes = random.randint(0, 60)
+    delay_minutes = random.randint(0, 10)
     delay_seconds = delay_minutes * 60
     
     if delay_minutes > 0:

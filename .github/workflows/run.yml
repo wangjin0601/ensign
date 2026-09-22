@@ -2,7 +2,7 @@ name: NSign
 
 on:
   schedule:
-    - cron: '58 8 * * *'
+    - cron: '58 3 * * *'
   workflow_dispatch:
 
 jobs:

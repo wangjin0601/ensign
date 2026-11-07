@@ -798,10 +798,21 @@ def main():
     try:
         random_delay()
         
-        # 获取环境变量中的认证Token
+        # 获取环境变量中的认证Token，若未配置则尝试读取本地 elantran_tokens.json
         auth_tokens_str = os.getenv('ELANTRAN_AUTH', '')
         if not auth_tokens_str:
-            print("❌ 未配置ELANTRAN_AUTH环境变量")
+            local_token_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'elantran_tokens.json')
+            if os.path.exists(local_token_file):
+                try:
+                    with open(local_token_file, 'r', encoding='utf-8') as f:
+                        token_store = json.load(f)
+                        auth_tokens_str = token_store.get('elantran_auth', '')
+                        if auth_tokens_str:
+                            print("📂 已从本地 elantran_tokens.json 加载认证Token")
+                except Exception as e:
+                    print("⚠️ 读取本地 elantran_tokens.json 失败: {}".format(e))
+        if not auth_tokens_str:
+            print("❌ 未配置ELANTRAN_AUTH环境变量，且本地未找到有效的 elantran_tokens.json")
             sys.exit(1)
         
         # 按&分割多个Token
